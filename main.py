@@ -17,23 +17,17 @@ from telethon.errors import SessionPasswordNeededError
 from middleware.client_middleware import TelethonClientMiddleware
 from handlers.invite_management import router as invite_router
 
+from telethon.sessions import StringSession
 import os
-import base64
-
-# Получите Base64-строку из переменной окружения
-session_base64 = os.getenv("SESSION_FILE_BASE64")
-
-# Декодируйте файл
-if session_base64:
-    with open("session_name.session", "wb") as f:
-        f.write(base64.b64decode(session_base64))
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Получение переменных окружения
+api_id = int(os.getenv('API_ID'))
+api_hash = os.getenv('API_HASH')
+string_session = os.getenv('STRING_SESSION')
 
 async def set_commands(bot: Bot) -> None:
     """Установка команд бота"""
@@ -46,7 +40,7 @@ async def set_commands(bot: Bot) -> None:
 
 async def setup_telethon() -> TelegramClient:
     """Настройка и авторизация Telethon клиента"""
-    client = TelegramClient("bot_session", API_ID, API_HASH)
+    client = TelegramClient(StringSession(string_session), api_id, api_hash)
     
     try:
         await client.connect()
@@ -81,7 +75,7 @@ async def main() -> None:
     # Инициализация бота и диспетчера
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
-    
+
     # Настройка Telethon клиента
     client = await setup_telethon()
     
