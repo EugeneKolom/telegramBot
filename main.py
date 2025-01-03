@@ -17,6 +17,17 @@ from telethon.errors import SessionPasswordNeededError
 from middleware.client_middleware import TelethonClientMiddleware
 from handlers.invite_management import router as invite_router
 
+import os
+import base64
+
+# Получите Base64-строку из переменной окружения
+session_base64 = os.getenv("SESSION_FILE_BASE64")
+
+# Декодируйте файл
+if session_base64:
+    with open("session_name.session", "wb") as f:
+        f.write(base64.b64decode(session_base64))
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
