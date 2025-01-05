@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import socket
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
@@ -29,6 +30,7 @@ api_id = int(os.getenv('API_ID'))
 api_hash = os.getenv('API_HASH')
 string_session = os.getenv('STRING_SESSION')
 
+
 async def set_commands(bot: Bot) -> None:
     """Установка команд бота"""
     commands = [
@@ -38,34 +40,41 @@ async def set_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(commands)
 
+
 async def setup_telethon() -> TelegramClient:
     """Настройка и авторизация Telethon клиента"""
     client = TelegramClient(StringSession(string_session), api_id, api_hash)
-    
     try:
         await client.connect()
-        
         if not await client.is_user_authorized():
             logger.info("Требуется авторизация в Telethon")
             phone = input("Введите номер телефона (в формате +7...): ")
             await client.send_code_request(phone)
             code = input("Введите код подтверждения из Telegram: ")
-            
             try:
                 await client.sign_in(phone, code)
             except SessionPasswordNeededError:
                 password = input("Введите пароль двухфакторной аутентификации: ")
                 await client.sign_in(password=password)
-                
         logger.info("Telethon клиент успешно авторизован")
         return client
-        
     except Exception as e:
         logger.error(f"Ошибка при настройке Telethon: {e}")
         raise
 
-async def main() -> None:
-    """Основная функция запуска бота"""
+
+async def start_dummy_server():
+    """Создаёт фиктивный сервер, который слушает порт, чтобы удовлетворить Render"""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("0.0.0.0", 8000))  # Render ожидает, что приложение будет слушать порт
+    server.listen(5)
+    logger.info("Фиктивный сервер запущен на порту 8000")
+    while True:
+        await asyncio.sleep(3600)  # Поддерживаем сервер активным
+
+
+async def run_bot():
+    """Функция для запуска бота"""
     logger.info("Запуск бота...")
     
     # Инициализация базы данных
@@ -111,6 +120,14 @@ async def main() -> None:
         await bot.session.close()
         await client.disconnect()
         db.close()
+
+
+async def main():
+    """Основная функция"""
+    bot_task = asyncio.create_task(run_bot())
+    dummy_server_task = asyncio.create_task(start_dummy_server())
+    await asyncio.gather(bot_task, dummy_server_task)
+
 
 if __name__ == "__main__":
     try:
