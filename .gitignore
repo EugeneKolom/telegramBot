@@ -30,6 +30,7 @@ var/
 # Telethon session files
 *.session
 *.session-journal
+convert_session.py
 
 # IDE specific files
 .idea/

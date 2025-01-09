@@ -82,7 +82,7 @@ async def run_bot():
     logger.info("База данных инициализирована")
     
     # Инициализация бота и диспетчера
-    bot = Bot(token=TOKEN)
+    bot = Bot(token=TOKEN, timeout=60) # Увеличить таймаут до 60 секунд
     dp = Dispatcher()
 
     # Настройка Telethon клиента
