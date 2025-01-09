@@ -1,9 +1,9 @@
 import asyncio
 import logging
+import signal
 import socket
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
-
 from config import TOKEN, API_ID, API_HASH
 from database.db import Database
 from handlers import (
@@ -17,7 +17,6 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from middleware.client_middleware import TelethonClientMiddleware
 from handlers.invite_management import router as invite_router
-
 from telethon.sessions import StringSession
 import os
 
@@ -30,6 +29,10 @@ api_id = int(os.getenv('API_ID'))
 api_hash = os.getenv('API_HASH')
 string_session = os.getenv('STRING_SESSION')
 
+# Глобальные переменные для хранения состояния
+bot = None
+client = None
+db = None
 
 async def set_commands(bot: Bot) -> None:
     """Установка команд бота"""
@@ -43,24 +46,23 @@ async def set_commands(bot: Bot) -> None:
 
 async def setup_telethon() -> TelegramClient:
     """Настройка и авторизация Telethon клиента"""
-    client = TelegramClient(StringSession(string_session), api_id, api_hash)
-    try:
-        await client.connect()
-        if not await client.is_user_authorized():
-            logger.info("Требуется авторизация в Telethon")
-            phone = input("Введите номер телефона (в формате +7...): ")
-            await client.send_code_request(phone)
-            code = input("Введите код подтверждения из Telegram: ")
-            try:
-                await client.sign_in(phone, code)
-            except SessionPasswordNeededError:
-                password = input("Введите пароль двухфакторной аутентификации: ")
-                await client.sign_in(password=password)
-        logger.info("Telethon клиент успешно авторизован")
-        return client
-    except Exception as e:
-        logger.error(f"Ошибка при настройке Telethon: {e}")
-        raise
+    async with TelegramClient(StringSession(string_session), api_id, api_hash) as client:
+        try:
+            if not await client.is_user_authorized():
+                logger.info("Требуется авторизация в Telethon")
+                phone = input("Введите номер телефона (в формате +7...): ")
+                await client.send_code_request(phone)
+                code = input("Введите код подтверждения из Telegram: ")
+                try:
+                    await client.sign_in(phone, code)
+                except SessionPasswordNeededError:
+                    password = input("Введите пароль двухфакторной аутентификации: ")
+                    await client.sign_in(password=password)
+            logger.info("Telethon клиент успешно авторизован")
+            return client
+        except Exception as e:
+            logger.error(f"Ошибка при настройке Telethon: {e}")
+            raise
 
 
 async def start_dummy_server():
@@ -75,6 +77,7 @@ async def start_dummy_server():
 
 async def run_bot():
     """Функция для запуска бота"""
+    global bot, client, db
     logger.info("Запуск бота...")
     
     # Инициализация базы данных
@@ -82,7 +85,7 @@ async def run_bot():
     logger.info("База данных инициализирована")
     
     # Инициализация бота и диспетчера
-    bot = Bot(token=TOKEN, timeout=60) # Увеличить таймаут до 60 секунд
+    bot = Bot(token=TOKEN, timeout=60)  # Увеличить таймаут до 60 секунд
     dp = Dispatcher()
 
     # Настройка Telethon клиента
@@ -117,13 +120,33 @@ async def run_bot():
         raise
     finally:
         logger.info("Завершение работы...")
+        await bot.session.close()  # Закрываем сессию aiogram
+        await client.disconnect()  # Закрываем Telethon клиент
+        db.close()  # Закрываем базу данных
+
+
+async def shutdown(signal, loop):
+    """Корректное завершение работы"""
+    global bot, client, db
+    logger.info(f"Получен сигнал завершения: {signal}")  # Используем параметр signal для логирования
+    if bot:
         await bot.session.close()
+    if client:
         await client.disconnect()
+    if db:
         db.close()
+    loop.stop()
 
 
 async def main():
     """Основная функция"""
+    loop = asyncio.get_event_loop()
+
+    # Регистрируем обработчики сигналов
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown(sig, loop)))
+
+    # Запускаем задачи
     bot_task = asyncio.create_task(run_bot())
     dummy_server_task = asyncio.create_task(start_dummy_server())
     await asyncio.gather(bot_task, dummy_server_task)
