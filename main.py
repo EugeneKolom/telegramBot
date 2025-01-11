@@ -12,7 +12,6 @@ from handlers import (
     group_parsing_router,
     group_management_router,
     user_parsing_router,
-    inviting_router
 )
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
