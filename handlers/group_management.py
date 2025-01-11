@@ -15,11 +15,17 @@ router = Router()
 
 # Просмотр групп
 @router.message(F.text == "📋 Просмотреть группы")
-async def view_groups(message: Message, telethon_client=None):
+async def view_groups(message: Message, telethon_client: TelegramClient):
     """Показывает список групп с информацией о количестве пользователей и приглашений"""
     try:
         if not telethon_client:
+            logger.error("Клиент Telethon не найден")
             await message.answer("❌ Ошибка: клиент Telethon не найден")
+            return
+
+        if not await telethon_client.is_user_authorized():
+            logger.error("Клиент Telethon не авторизован")
+            await message.answer("❌ Ошибка: клиент Telethon не авторизован")
             return
 
         db = Database("bot_database.db")
@@ -35,6 +41,7 @@ async def view_groups(message: Message, telethon_client=None):
         groups = cursor.fetchall()
         
         if not groups:
+            logger.warning("В базе данных нет сохраненных групп")
             await message.answer("❌ В базе данных нет сохраненных групп")
             return
             
@@ -76,10 +83,11 @@ async def view_groups(message: Message, telethon_client=None):
 
 # Удаление групп с галочками
 @router.message(F.text == "❌ Удалить группу")
-async def delete_group_start(message: Message, state: FSMContext, telethon_client=None):
+async def delete_group_start(message: Message, state: FSMContext, telethon_client: TelegramClient):
     """Начало процесса удаления групп с выбором через галочки"""
     try:
         if not telethon_client:
+            logger.error("Клиент Telethon не найден")
             await message.answer("❌ Ошибка: клиент Telethon не найден")
             return
 
@@ -88,6 +96,7 @@ async def delete_group_start(message: Message, state: FSMContext, telethon_clien
         groups = cursor.fetchall()
         
         if not groups:
+            logger.warning("В базе данных нет сохраненных групп")
             await message.answer("❌ В базе данных нет сохраненных групп")
             return
             
@@ -126,7 +135,14 @@ async def delete_group_start(message: Message, state: FSMContext, telethon_clien
 async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора/снятия выбора группы"""
     try:
-        index = int(callback.data.split("_")[3])
+        # Получаем индекс группы из callback-данных
+        callback_data = callback.data
+        if callback_data == "delete_group_select_all":
+            # Если выбрана кнопка "Выбрать все", пропускаем обработку
+            await callback.answer("Используйте кнопку 'Выбрать все'")
+            return
+
+        index = int(callback_data.split("_")[3])  # Преобразуем индекс в число
         state_data = await state.get_data()
         found_groups = state_data.get("found_groups", [])
         selected_groups = state_data.get("selected_groups", [])
@@ -298,10 +314,11 @@ async def add_group_manually(message: Message, state: FSMContext):
     await state.set_state(BotStates.waiting_for_group_name)
 
 @router.message(BotStates.waiting_for_group_name)
-async def process_group_name(message: Message, state: FSMContext, telethon_client=None):
+async def process_group_name(message: Message, state: FSMContext, telethon_client: TelegramClient):
     """Обработка ввода username группы"""
     try:
         if not telethon_client:
+            logger.error("Клиент Telethon не найден")
             await message.answer("❌ Ошибка: клиент Telethon не найден")
             return
 
@@ -333,6 +350,7 @@ async def process_group_name(message: Message, state: FSMContext, telethon_clien
             )
             
         except Exception as e:
+            logger.error(f"Ошибка при добавлении группы: {e}")
             await message.answer(
                 f"❌ Ошибка при добавлении группы:\n"
                 f"{str(e)}\n\n"
@@ -343,6 +361,7 @@ async def process_group_name(message: Message, state: FSMContext, telethon_clien
             )
             
     except Exception as e:
+        logger.error(f"Ошибка при обработке username группы: {e}")
         await message.answer(f"❌ Произошла ошибка: {str(e)}")
     finally:
         await state.clear()
