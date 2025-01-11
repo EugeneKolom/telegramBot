@@ -129,7 +129,7 @@ async def run_bot():
         if db:
             db.close()  # Закрываем базу данных
 
-async def shutdown(signal, loop):
+async def shutdown(signal=None):
     """Корректное завершение работы"""
     global bot, client, db
     logger.info(f"Получен сигнал завершения: {signal}")
@@ -139,34 +139,23 @@ async def shutdown(signal, loop):
         await client.disconnect()
     if db:
         db.close()
-    loop.stop()
 
 async def main():
     """Основная функция"""
-    loop = asyncio.get_event_loop()
-    tasks = []
-
     # Запускаем основные задачи
     bot_task = asyncio.create_task(run_bot())
     dummy_server_task = asyncio.create_task(start_dummy_server())
-    tasks.append(bot_task)
-    tasks.append(dummy_server_task)
-
-    # Регистрируем обработчики сигналов для Unix-систем
-    if platform.system() != "Windows":
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown(sig, loop)))
 
     try:
         # Ожидаем завершения всех задач
-        await asyncio.gather(*tasks)
+        await asyncio.gather(bot_task, dummy_server_task)
     except asyncio.CancelledError:
         logger.info("Задачи отменены")
     except Exception as e:
         logger.error(f"Ошибка в main: {e}")
     finally:
         # Корректное завершение
-        await shutdown(None, loop)
+        await shutdown()
 
 if __name__ == "__main__":
     try:
