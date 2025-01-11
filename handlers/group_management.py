@@ -212,4 +212,47 @@ async def add_group_manually(message: Message, state: FSMContext):
 async def process_group_name(message: Message, state: FSMContext, telethon_client=None):
     try:
         if not telethon_client:
-            await message.answer("❌ Ошибка: клиент Telethon не
+            await message.answer("❌ Ошибка: клиент Telethon не найден")
+            return
+
+        group_username = message.text.strip()
+        
+        # Очищаем ссылку от лишнего
+        if 't.me/' in group_username:
+            group_username = group_username.split('t.me/')[-1]
+        elif '@' in group_username:
+            group_username = group_username.lstrip('@')
+            
+        try:
+            # Пробуем получить информацию о группе
+            group_entity = await telethon_client.get_entity(f"t.me/{group_username}")
+            
+            # Сохраняем группу в базу
+            db = Database("bot_database.db")
+            db.execute(
+                "INSERT OR IGNORE INTO groups (id, name, username) VALUES (?, ?, ?)",
+                (group_entity.id, group_entity.title, group_username)
+            )
+            db.commit()
+            
+            await message.answer(
+                f"✅ Группа успешно добавлена!\n\n"
+                f"📱 Название: {group_entity.title}\n"
+                f"🔗 Username: @{group_username}\n"
+                f"🆔 ID: {group_entity.id}"
+            )
+            
+        except Exception as e:
+            await message.answer(
+                f"❌ Ошибка при добавлении группы:\n"
+                f"{str(e)}\n\n"
+                f"Убедитесь, что:\n"
+                f"• Группа существует\n"
+                f"• Группа публичная\n"
+                f"• Указан правильный username"
+            )
+            
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка: {str(e)}")
+    finally:
+        await state.clear()
