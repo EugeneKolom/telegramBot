@@ -1,26 +1,28 @@
-import asyncio
-import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from states.states import BotStates
+from database.db import Database
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from telethon.tl.functions.channels import GetFullChannelRequest, GetParticipantsRequest
+from telethon.tl.functions.channels import (
+    GetFullChannelRequest,
+    GetParticipantsRequest,
+    JoinChannelRequest,
+    LeaveChannelRequest,
+)
 from telethon.tl.types import (
     ChannelParticipantsSearch,
     ChannelParticipantsRecent,
+    ChannelParticipantsBots,
     ChannelParticipantsAdmins,
 )
-from database.db import Database
-from states.states import BotStates
-
-# Настройка логирования
-logger = logging.getLogger(__name__)
+import asyncio
 
 router = Router()
 
+
 @router.message(F.text == "👥 Поиск пользователей")
 async def start_parse_users(message: Message, state: FSMContext, telethon_client=None):
-    """Начало парсинга пользователей: выбор группы."""
     try:
         if not telethon_client:
             await message.answer("❌ Ошибка: клиент Telethon не найден")
@@ -43,29 +45,29 @@ async def start_parse_users(message: Message, state: FSMContext, telethon_client
                 participants_count = full_chat.full_chat.participants_count
                 builder.button(
                     text=f"👥 {group[1]} (@{group[2]}) | {participants_count} подписчиков",
-                    callback_data=f"parse_users_{group[0]}"
+                    callback_data=f"parse_users_{group[0]}",
                 )
             except Exception as e:
-                logger.error(f"Ошибка при получении информации о группе {group[2]}: {e}")
                 builder.button(
                     text=f"👥 {group[1]} (@{group[2]}) | Ошибка",
-                    callback_data=f"parse_users_{group[0]}"
+                    callback_data=f"parse_users_{group[0]}",
                 )
+                print(f"Ошибка при получении информации о группе {group[2]}: {e}")
 
         builder.adjust(1)
 
         await message.answer(
             "Выберите группу для поиска пользователей:",
-            reply_markup=builder.as_markup()
+            reply_markup=builder.as_markup(),
         )
 
     except Exception as e:
-        logger.error(f"Ошибка при показе групп для парсинга: {e}")
+        print(f"Ошибка при показе групп для парсинга: {e}")
         await message.answer("❌ Произошла ошибка при получении списка групп")
+
 
 @router.callback_query(lambda c: c.data.startswith("parse_users_"))
 async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
-    """Обработка выбора группы для парсинга."""
     try:
         if not telethon_client:
             await callback.answer("❌ Ошибка: клиент Telethon не найден")
@@ -86,22 +88,23 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
         try:
             # Получаем участников группы
             group_entity = await telethon_client.get_entity(f"t.me/{group[2]}")
-            participants = await parse_all_users(telethon_client, group_entity, callback.message)
+            participants = await telethon_client.get_participants(group_entity)
 
             # Счетчики для статистики
-            total_users = len(participants)
+            total_users = 0
             saved_users = 0
 
             for participant in participants:
+                total_users += 1
                 if participant.username:  # Сохраняем только пользователей с username
                     try:
                         db.execute(
                             "INSERT OR IGNORE INTO contacts (username, group_id) VALUES (?, ?)",
-                            (participant.username, group_id)
+                            (participant.username, group_id),
                         )
                         saved_users += 1
                     except Exception as e:
-                        logger.error(f"Ошибка при сохранении пользователя {participant.username}: {e}")
+                        print(f"Ошибка при сохранении пользователя {participant.username}: {e}")
 
             db.commit()
 
@@ -128,7 +131,6 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
                 await callback.message.edit_text(success_message)
 
         except Exception as e:
-            logger.error(f"Ошибка при парсинге группы {group[2]}: {e}")
             error_message = (
                 f"❌ Парсинг не удался!\n\n"
                 f"Причина: {str(e)}\n\n"
@@ -138,23 +140,25 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
                 f"- Попробуйте позже"
             )
             await callback.message.edit_text(error_message)
+            print(f"Ошибка при парсинге группы {group[2]}: {e}")
 
     except Exception as e:
-        logger.error(f"Ошибка в обработчике парсинга: {e}")
+        print(f"Ошибка в обработчике парсинга: {e}")
         await callback.message.edit_text(
-            f"❌ Произошла ошибка при парсинге пользователей\n\n"
-            f"Причина: {str(e)}"
+            f"❌ Произошла ошибка при парсинге пользователей\n\n" f"Причина: {str(e)}"
         )
 
+
 async def parse_all_users(client, entity, status_message):
-    """Парсинг всех пользователей группы."""
+    """Парсинг всех пользователей группы"""
     all_participants = []
 
     # Различные фильтры для получения всех типов пользователей
     filters = [
-        ChannelParticipantsSearch(''),  # Все пользователи
-        ChannelParticipantsRecent(),    # Недавние пользователи
-        ChannelParticipantsAdmins(),    # Администраторы
+        ChannelParticipantsSearch(""),  # Все пользователи
+        ChannelParticipantsRecent(),  # Недавние пользователи
+        ChannelParticipantsAdmins(),  # Администраторы
+        ChannelParticipantsBots(),  # Боты
     ]
 
     for filter_type in filters:
@@ -163,20 +167,25 @@ async def parse_all_users(client, entity, status_message):
 
         while True:
             try:
-                participants = await client(GetParticipantsRequest(
-                    channel=entity,
-                    filter=filter_type,
-                    offset=offset,
-                    limit=limit,
-                    hash=0
-                ))
+                participants = await client(
+                    GetParticipantsRequest(
+                        channel=entity,
+                        filter=filter_type,
+                        offset=offset,
+                        limit=limit,
+                        hash=0,
+                    )
+                )
 
                 if not participants.users:
                     break
 
                 # Добавляем только уникальных пользователей
-                new_users = [user for user in participants.users
-                            if user.id not in [p.id for p in all_participants]]
+                new_users = [
+                    user
+                    for user in participants.users
+                    if user.id not in [p.id for p in all_participants]
+                ]
                 all_participants.extend(new_users)
 
                 # Обновляем статус
@@ -193,7 +202,111 @@ async def parse_all_users(client, entity, status_message):
                     break
 
             except Exception as e:
-                logger.error(f"Ошибка при парсинге с фильтром {filter_type.__class__.__name__}: {e}")
+                print(f"Ошибка при парсинге с фильтром {filter_type.__class__.__name__}: {e}")
                 continue
 
     return all_participants
+
+
+@router.message(BotStates.waiting_for_group_name)
+async def parse_users_handler(message: Message, state: FSMContext, client=None):
+    try:
+        input_text = message.text.strip()
+        status_message = await message.answer("🔄 Начинаю парсинг...")
+
+        try:
+            # Получаем группу
+            if input_text.isdigit():
+                group_id = int(input_text)
+                entity = await client.get_entity(group_id)
+            else:
+                group_username = input_text.lstrip("@")
+                entity = await client.get_entity(group_username)
+
+            # Сохраняем группу в базу
+            db = Database("bot_database.db")
+            db_group_id = db.execute(
+                "INSERT OR IGNORE INTO groups (name, username) VALUES (?, ?)",
+                (entity.title, entity.username if hasattr(entity, "username") else None),
+            ).lastrowid
+            db.commit()
+
+            # Парсим всех пользователей
+            all_participants = await parse_all_users(client, entity, status_message)
+
+            # Сохраняем пользователей в базу
+            users_count = 0
+            for user in all_participants:
+                if user.bot:  # Пропускаем только ботов
+                    continue
+
+                user_data = {
+                    "id": user.id,
+                    "name": f"{user.first_name or ''} {user.last_name or ''}".strip(),
+                    "username": user.username or "No username",
+                    "is_active": not user.deleted,  # Отмечаем удаленных пользователей
+                    "is_bot": user.bot,
+                    "is_admin": hasattr(user, "admin_rights") and user.admin_rights is not None,
+                }
+
+                if db.execute(
+                    "INSERT OR IGNORE INTO contacts (username, group_id) VALUES (?, ?)",
+                    (user_data["username"], db_group_id),
+                ).rowcount:
+                    users_count += 1
+
+                if users_count % 100 == 0:
+                    await status_message.edit_text(
+                        f"💾 Сохранение пользователей в базу...\n"
+                        f"Обработано: {users_count}/{len(all_participants)}"
+                    )
+
+            # Получаем итоговую статистику
+            cursor = db.execute("SELECT COUNT(*) FROM contacts WHERE group_id = ?", (db_group_id,))
+            total_users_in_db = cursor.fetchone()[0]
+
+            await status_message.edit_text(
+                f"✅ Парсинг завершен\n\n"
+                f"📊 Статистика:\n"
+                f"👥 Всего найдено: {len(all_participants)}\n"
+                f"✨ Новых добавлено: {users_count}\n"
+                f"📝 Всего в базе: {total_users_in_db}\n\n"
+                f"ℹ️ Информация о группе:\n"
+                f"📌 Название: {entity.title}\n"
+                f"🔗 Username: {f'@{entity.username}' if entity.username else 'Отсутствует'}\n"
+                f"🆔 ID: {entity.id}"
+            )
+
+        except ValueError as e:
+            await status_message.edit_text(
+                f"❌ Ошибка формата: {str(e)}\n\n"
+                "Введите:\n"
+                "1. ID группы (например: 1234567890)\n"
+                "2. Или username группы (например: @group или group)"
+            )
+        except Exception as e:
+            await status_message.edit_text(f"❌ Ошибка при парсинге: {str(e)}")
+
+    except Exception as e:
+        await message.answer(f"❌ Общая ошибка: {str(e)}")
+    finally:
+        await state.clear()
+
+
+# Пример использования JoinChannelRequest и LeaveChannelRequest
+async def join_channel(client, channel_username):
+    try:
+        entity = await client.get_entity(channel_username)
+        await client(JoinChannelRequest(entity))
+        print(f"Успешно вступили в канал {channel_username}")
+    except Exception as e:
+        print(f"Ошибка при вступлении в канал: {e}")
+
+
+async def leave_channel(client, channel_username):
+    try:
+        entity = await client.get_entity(channel_username)
+        await client(LeaveChannelRequest(entity))
+        print(f"Успешно вышли из канала {channel_username}")
+    except Exception as e:
+        print(f"Ошибка при выходе из канала: {e}")
