@@ -8,3 +8,4 @@ class BotStates(StatesGroup):
     waiting_for_manual_group = State()
     waiting_for_group_to_parse = State()
     selecting_groups = State() 
+    deleting_groups = State()
