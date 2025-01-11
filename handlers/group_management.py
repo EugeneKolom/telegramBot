@@ -138,8 +138,7 @@ async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
         # Получаем индекс группы из callback-данных
         callback_data = callback.data
         if callback_data == "delete_group_select_all":
-            # Если выбрана кнопка "Выбрать все", пропускаем обработку
-            await callback.answer("Используйте кнопку 'Выбрать все'")
+            # Если это кнопка "Выбрать все", пропускаем обработку
             return
 
         index = int(callback_data.split("_")[3])  # Преобразуем индекс в число
@@ -186,6 +185,10 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
         state_data = await state.get_data()
         found_groups = state_data.get("found_groups", [])
         
+        if not found_groups:
+            await callback.answer("❌ Нет групп для выбора")
+            return
+        
         # Выбираем все группы
         selected_groups = list(range(len(found_groups)))
         await state.update_data(selected_groups=selected_groups)
@@ -210,6 +213,8 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
             "📋 Выберите группы для удаления:",
             reply_markup=builder.as_markup()
         )
+        
+        await callback.answer("Все группы выбраны")
         
     except Exception as e:
         logger.error(f"Ошибка при выборе всех групп: {e}")
