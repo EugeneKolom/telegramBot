@@ -2,6 +2,7 @@ import asyncio
 from aiogram import Router, F
 from telethon.sync import TelegramClient
 from telethon.tl.functions.contacts import SearchRequest
+from telethon.tl.functions.channels import GetFullChannelRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from states.states import BotStates
@@ -10,8 +11,28 @@ from database.db import Database
 
 router = Router()
 
+async def is_comments_enabled(client, chat):
+    """Проверка, разрешены ли комментарии в канале"""
+    try:
+        full_chat = await client(GetFullChannelRequest(chat))
+        return full_chat.full_chat.comments_enabled
+    except Exception as e:
+        print(f"Ошибка при проверке комментариев: {e}")
+        return False
+
+async def has_user_messages(client, chat):
+    """Проверка, есть ли сообщения от пользователей"""
+    try:
+        async for message in client.iter_messages(chat, limit=10):
+            if message.sender and not message.sender.bot:
+                return True
+        return False
+    except Exception as e:
+        print(f"Ошибка при проверке сообщений: {e}")
+        return False
+
 async def global_search(client: TelegramClient, keywords: list[str]):
-    """Поиск групп через поиск Telegram"""
+    """Поиск групп через поиск Telegram с фильтрацией"""
     results = []
     unique_groups = set()  # Для хранения уникальных групп
 
@@ -29,15 +50,24 @@ async def global_search(client: TelegramClient, keywords: list[str]):
                 print(f"Найдено чатов: {len(search_result.chats)}")
                 for chat in search_result.chats:
                     if hasattr(chat, 'username') and chat.username:
-                        group_data = (chat.id, chat.title, chat.username)  # Используем кортеж для уникальности
-                        if group_data not in unique_groups:
-                            unique_groups.add(group_data)
-                            results.append({
-                                "id": chat.id,
-                                "title": chat.title,
-                                "username": chat.username
-                            })
-                            print(f"Найдена группа: {chat.title} (@{chat.username})")
+                        # Проверяем, разрешены ли комментарии
+                        comments_enabled = await is_comments_enabled(client, chat)
+                        
+                        # Проверяем, есть ли сообщения от пользователей
+                        has_messages = await has_user_messages(client, chat)
+                        
+                        if comments_enabled or has_messages:
+                            group_data = (chat.id, chat.title, chat.username)  # Используем кортеж для уникальности
+                            if group_data not in unique_groups:
+                                unique_groups.add(group_data)
+                                results.append({
+                                    "id": chat.id,
+                                    "title": chat.title,
+                                    "username": chat.username,
+                                    "comments_enabled": comments_enabled,
+                                    "has_user_messages": has_messages
+                                })
+                                print(f"Найдена группа: {chat.title} (@{chat.username})")
 
             await asyncio.sleep(2)  # Задержка между запросами
 
@@ -75,8 +105,10 @@ async def search_groups_handler(message: Message, state: FSMContext, telethon_cl
         builder = InlineKeyboardBuilder()
         for i, group in enumerate(groups):
             username_part = f"(@{group['username']})" if group['username'] else "(без username)"
+            comments_info = "💬" if group['comments_enabled'] else ""
+            messages_info = "📨" if group['has_user_messages'] else ""
             builder.button(
-                text=f"⬜️ {group['title']} {username_part}",
+                text=f"⬜️ {group['title']} {username_part} {comments_info} {messages_info}",
                 callback_data=f"select_group_{i}"
             )
         
@@ -119,8 +151,10 @@ async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
         for i, group in enumerate(found_groups):
             checkbox = "✅" if i in selected_groups else "⬜️"
             username_part = f"(@{group['username']})" if group['username'] else "(без username)"
+            comments_info = "💬" if group['comments_enabled'] else ""
+            messages_info = "📨" if group['has_user_messages'] else ""
             builder.button(
-                text=f"{checkbox} {group['title']} {username_part}",
+                text=f"{checkbox} {group['title']} {username_part} {comments_info} {messages_info}",
                 callback_data=f"select_group_{i}"
             )
         
@@ -153,8 +187,10 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
         builder = InlineKeyboardBuilder()
         for i, group in enumerate(found_groups):
             username_part = f"(@{group['username']})" if group['username'] else "(без username)"
+            comments_info = "💬" if group['comments_enabled'] else ""
+            messages_info = "📨" if group['has_user_messages'] else ""
             builder.button(
-                text=f"✅ {group['title']} {username_part}",
+                text=f"✅ {group['title']} {username_part} {comments_info} {messages_info}",
                 callback_data=f"select_group_{i}"
             )
         
@@ -186,8 +222,10 @@ async def handle_deselect_all(callback: CallbackQuery, state: FSMContext):
         builder = InlineKeyboardBuilder()
         for i, group in enumerate(found_groups):
             username_part = f"(@{group['username']})" if group['username'] else "(без username)"
+            comments_info = "💬" if group['comments_enabled'] else ""
+            messages_info = "📨" if group['has_user_messages'] else ""
             builder.button(
-                text=f"⬜️ {group['title']} {username_part}",
+                text=f"⬜️ {group['title']} {username_part} {comments_info} {messages_info}",
                 callback_data=f"select_group_{i}"
             )
         
