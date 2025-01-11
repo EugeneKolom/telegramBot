@@ -1,206 +1,13 @@
-import asyncio
 from aiogram import Router, F
-from telethon.sync import TelegramClient
-from telethon.tl.types import InputPeerEmpty, Chat, Channel
-from telethon.tl.functions.messages import SearchGlobalRequest
-from telethon.tl.functions.contacts import SearchRequest
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from states.states import BotStates
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import Database
+from telethon import TelegramClient
 from telethon.tl.functions.channels import GetFullChannelRequest
 
 router = Router()
-
-async def global_search(client: TelegramClient, keywords: list[str]):
-    """Поиск групп через поиск Telegram"""
-    results = []
-    for keyword in keywords:
-        print(f"🔍 Поиск по ключевому слову: {keyword}")
-        try:
-            search_result = await client(SearchRequest(
-                q=keyword,
-                limit=100
-            ))
-            
-            print(f"Получен результат поиска для '{keyword}'")
-            
-            if hasattr(search_result, 'chats'):
-                print(f"Найдено чатов: {len(search_result.chats)}")
-                for chat in search_result.chats:
-                    if hasattr(chat, 'username') and chat.username:
-                        group_data = {
-                            "id": chat.id,
-                            "title": chat.title,
-                            "username": chat.username
-                        }
-                        if group_data not in results:
-                            results.append(group_data)
-                            print(f"Найдена группа: {group_data['title']} (@{group_data['username']})")
-
-            await asyncio.sleep(2)
-
-        except Exception as e:
-            print(f"❌ Ошибка при поиске: {str(e)}")
-            print(f"Тип ошибки: {type(e)}")
-            continue
-
-    print(f"Всего найдено уникальных групп: {len(results)}")
-    return results
-
-@router.message(BotStates.waiting_for_keywords)
-async def search_groups_handler(message: Message, state: FSMContext, telethon_client=None):
-    try:
-        if not telethon_client:
-            await message.answer("❌ Ошибка: клиент Telethon не найден")
-            return
-
-        keywords = [k.strip() for k in message.text.split(',')]
-        await message.answer(f"🔍 Начинаю поиск групп по ключевым словам: {keywords}")
-
-        groups = await global_search(telethon_client, keywords)
-
-        if not groups:
-            await message.answer("❌ Группы не найдены")
-            await state.clear()
-            return
-
-        await state.update_data(found_groups=groups)
-        
-        builder = InlineKeyboardBuilder()
-        for i, group in enumerate(groups):
-            username_part = f"(@{group['username']})" if group['username'] else "(без username)"
-            builder.button(
-                text=f"⬜️ {group['title']} {username_part}",
-                callback_data=f"select_group_{i}"
-            )
-        
-        builder.button(text="✅ Выбрать все", callback_data="select_all")
-        builder.button(text="❌ Снять выбор", callback_data="deselect_all")
-        builder.button(text="💾 Сохранить выбранные", callback_data="save_selected")
-        
-        builder.adjust(1)
-        
-        await message.answer(
-            "📋 Выберите группы для сохранения:",
-            reply_markup=builder.as_markup()
-        )
-        
-        await state.set_state(BotStates.selecting_groups)
-        await state.update_data(selected_groups=[])
-
-    except Exception as e:
-        print(f"❌ Ошибка при поиске групп: {e}")
-        await message.answer(f"❌ Произошла ошибка при поиске: {str(e)}")
-        await state.clear()
-
-@router.message(F.text == "🔍 Парсить группы")
-async def text_parse_groups(message: Message, state: FSMContext):
-    await message.answer("Введите ключевые слова для поиска групп через запятую:")
-    await state.set_state(BotStates.waiting_for_keywords)
-
-@router.callback_query(lambda c: c.data.startswith("select_group_"))
-async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
-    try:
-        group_index = int(callback.data.split("_")[2])
-        state_data = await state.get_data()
-        found_groups = state_data.get("found_groups", [])
-        selected_groups = state_data.get("selected_groups", [])
-
-        if group_index < len(found_groups):
-            group = found_groups[group_index]
-            if group_index in selected_groups:
-                selected_groups.remove(group_index)
-                checkbox = "⬜️"
-            else:
-                selected_groups.append(group_index)
-                checkbox = "✅"
-
-            await state.update_data(selected_groups=selected_groups)
-
-            # Обновляем текст кнопки
-            username_part = f"(@{group['username']})" if group['username'] else "(без username)"
-            builder = InlineKeyboardBuilder()
-            
-            # Воссоздаем все кнопки
-            for i, g in enumerate(found_groups):
-                is_selected = i in selected_groups
-                u_part = f"(@{g['username']})" if g['username'] else "(без username)"
-                builder.button(
-                    text=f"{'✅' if is_selected else '⬜️'} {g['title']} {u_part}",
-                    callback_data=f"select_group_{i}"
-                )
-
-            builder.button(text="✅ Выбрать все", callback_data="select_all")
-            builder.button(text="❌ Снять выбор", callback_data="deselect_all")
-            builder.button(text="💾 Сохранить выбранные", callback_data="save_selected")
-            
-            builder.adjust(1)
-
-            await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
-            await callback.answer()
-
-    except Exception as e:
-        print(f"Ошибка при обработке выбора группы: {e}")
-        await callback.answer("Произошла ошибка при выборе группы")
-
-@router.callback_query(lambda c: c.data == "select_all")
-async def handle_select_all(callback: CallbackQuery, state: FSMContext):
-    try:
-        state_data = await state.get_data()
-        found_groups = state_data.get("found_groups", [])
-        selected_groups = list(range(len(found_groups)))
-        await state.update_data(selected_groups=selected_groups)
-
-        builder = InlineKeyboardBuilder()
-        for i, group in enumerate(found_groups):
-            username_part = f"(@{group['username']})" if group['username'] else "(без username)"
-            builder.button(
-                text=f"✅ {group['title']} {username_part}",
-                callback_data=f"select_group_{i}"
-            )
-
-        builder.button(text="✅ Выбрать все", callback_data="select_all")
-        builder.button(text="❌ Снять выбор", callback_data="deselect_all")
-        builder.button(text="💾 Сохранить выбранные", callback_data="save_selected")
-        
-        builder.adjust(1)
-
-        await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
-        await callback.answer("Выбраны все группы")
-
-    except Exception as e:
-        print(f"Ошибка при выборе всех групп: {e}")
-        await callback.answer("Произошла ошибка при выборе всех групп")
-
-@router.callback_query(lambda c: c.data == "deselect_all")
-async def handle_deselect_all(callback: CallbackQuery, state: FSMContext):
-    try:
-        state_data = await state.get_data()
-        found_groups = state_data.get("found_groups", [])
-        await state.update_data(selected_groups=[])
-
-        builder = InlineKeyboardBuilder()
-        for i, group in enumerate(found_groups):
-            username_part = f"(@{group['username']})" if group['username'] else "(без username)"
-            builder.button(
-                text=f"⬜️ {group['title']} {username_part}",
-                callback_data=f"select_group_{i}"
-            )
-
-        builder.button(text="✅ Выбрать все", callback_data="select_all")
-        builder.button(text="❌ Снять выбор", callback_data="deselect_all")
-        builder.button(text="💾 Сохранить выбранные", callback_data="save_selected")
-        
-        builder.adjust(1)
-
-        await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
-        await callback.answer("Выбор всех групп снят")
-
-    except Exception as e:
-        print(f"Ошибка при снятии выбора всех групп: {e}")
-        await callback.answer("Произошла ошибка при снятии выбора")
 
 @router.callback_query(lambda c: c.data == "save_selected")
 async def save_selected_groups(callback: CallbackQuery, state: FSMContext):
@@ -218,23 +25,47 @@ async def save_selected_groups(callback: CallbackQuery, state: FSMContext):
         
         # Сохраняем группы в базу данных
         db = Database("bot_database.db")
+        saved_count = 0
+        already_exists = 0
+        
         for group in selected_groups:
             try:
+                # Проверяем, существует ли группа уже в базе
+                cursor = db.execute("SELECT id FROM groups WHERE username = ?", (group['username'],))
+                existing_group = cursor.fetchone()
+                
+                if existing_group:
+                    already_exists += 1
+                    continue
+                
+                # Сохраняем новую группу
                 db.execute(
-                    "INSERT OR IGNORE INTO groups (id, name, username) VALUES (?, ?, ?)",
+                    "INSERT INTO groups (id, name, username) VALUES (?, ?, ?)",
                     (group['id'], group['title'], group['username'])
                 )
-                db.commit()
+                saved_count += 1
+                
             except Exception as e:
                 print(f"Ошибка при сохранении группы {group['title']}: {e}")
+                continue
         
-        await callback.answer("✅ Выбранные группы сохранены")
-        await callback.message.answer(f"Сохранено {len(selected_groups)} групп")
+        db.commit()
+        
+        # Формируем сообщение о результатах
+        result_message = (
+            f"✅ Результаты сохранения:\n\n"
+            f"📥 Сохранено новых групп: {saved_count}\n"
+            f"📝 Уже существующих: {already_exists}\n"
+            f"📊 Всего выбрано: {len(selected_indices)}"
+        )
+        
+        await callback.message.edit_text(result_message)
         await state.clear()
         
     except Exception as e:
         print(f"Ошибка при сохранении групп: {e}")
         await callback.answer("❌ Ошибка при сохранении групп")
+        await state.clear()
 
 @router.message(F.text == "📋 Просмотреть группы")
 async def view_groups(message: Message, telethon_client=None):
@@ -381,47 +212,4 @@ async def add_group_manually(message: Message, state: FSMContext):
 async def process_group_name(message: Message, state: FSMContext, telethon_client=None):
     try:
         if not telethon_client:
-            await message.answer("❌ Ошибка: клиент Telethon не найден")
-            return
-
-        group_username = message.text.strip()
-        
-        # Очищаем ссылку от лишнего
-        if 't.me/' in group_username:
-            group_username = group_username.split('t.me/')[-1]
-        elif '@' in group_username:
-            group_username = group_username.lstrip('@')
-            
-        try:
-            # Пробуем получить информацию о группе
-            group_entity = await telethon_client.get_entity(f"t.me/{group_username}")
-            
-            # Сохраняем группу в базу
-            db = Database("bot_database.db")
-            db.execute(
-                "INSERT OR IGNORE INTO groups (id, name, username) VALUES (?, ?, ?)",
-                (group_entity.id, group_entity.title, group_username)
-            )
-            db.commit()
-            
-            await message.answer(
-                f"✅ Группа успешно добавлена!\n\n"
-                f"📱 Название: {group_entity.title}\n"
-                f"🔗 Username: @{group_username}\n"
-                f"🆔 ID: {group_entity.id}"
-            )
-            
-        except Exception as e:
-            await message.answer(
-                f"❌ Ошибка при добавлении группы:\n"
-                f"{str(e)}\n\n"
-                f"Убедитесь, что:\n"
-                f"• Группа существует\n"
-                f"• Группа публичная\n"
-                f"• Указан правильный username"
-            )
-            
-    except Exception as e:
-        await message.answer(f"❌ Произошла ошибка: {str(e)}")
-    finally:
-        await state.clear()
+            await message.answer("❌ Ошибка: клиент Telethon не
