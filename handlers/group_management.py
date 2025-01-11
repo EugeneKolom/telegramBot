@@ -182,6 +182,7 @@ async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
 async def handle_select_all(callback: CallbackQuery, state: FSMContext):
     """Выбор всех групп"""
     try:
+        # Получаем данные из состояния
         state_data = await state.get_data()
         found_groups = state_data.get("found_groups", [])
         
@@ -189,7 +190,7 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
             await callback.answer("❌ Нет групп для выбора")
             return
         
-        # Выбираем все группы
+        # Выбираем все группы (добавляем все индексы в selected_groups)
         selected_groups = list(range(len(found_groups)))
         await state.update_data(selected_groups=selected_groups)
         
@@ -203,17 +204,20 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
                 callback_data=f"delete_group_select_{i}"
             )
         
+        # Добавляем кнопки управления
         builder.button(text="✅ Выбрать все", callback_data="delete_group_select_all")
         builder.button(text="❌ Снять выбор", callback_data="delete_group_deselect_all")
         builder.button(text="🗑️ Подтвердить удаление", callback_data="delete_group_confirm")
         
         builder.adjust(1)
         
+        # Обновляем сообщение с новой клавиатурой
         await callback.message.edit_text(
             "📋 Выберите группы для удаления:",
             reply_markup=builder.as_markup()
         )
         
+        # Уведомляем пользователя
         await callback.answer("Все группы выбраны")
         
     except Exception as e:
