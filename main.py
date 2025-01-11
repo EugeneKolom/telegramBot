@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import signal
 import socket
 import os
 from aiogram import Bot, Dispatcher

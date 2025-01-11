@@ -13,8 +13,6 @@ from telethon.tl.functions.channels import (
 from telethon.tl.types import (
     ChannelParticipantsSearch,
     ChannelParticipantsRecent,
-    ChannelParticipantsBots,
-    ChannelParticipantsAdmins,
 )
 import asyncio
 
@@ -23,6 +21,9 @@ router = Router()
 
 @router.message(F.text == "👥 Поиск пользователей")
 async def start_parse_users(message: Message, state: FSMContext, telethon_client=None):
+    """
+    Начало парсинга пользователей. Показывает список групп для выбора.
+    """
     try:
         if not telethon_client:
             await message.answer("❌ Ошибка: клиент Telethon не найден")
@@ -66,8 +67,62 @@ async def start_parse_users(message: Message, state: FSMContext, telethon_client
         await message.answer("❌ Произошла ошибка при получении списка групп")
 
 
+async def parse_all_users(client, entity, status_message):
+    """
+    Парсинг всех пользователей группы (без ботов и администраторов).
+    """
+    all_participants = []
+
+    # Используем только нужные фильтры
+    filters = [
+        ChannelParticipantsSearch(''),  # Все пользователи
+        ChannelParticipantsRecent(),    # Недавние пользователи
+    ]
+
+    for filter_type in filters:
+        offset = 0
+        limit = 200  # Лимит на количество пользователей за один запрос
+
+        while True:
+            try:
+                participants = await client(GetParticipantsRequest(
+                    channel=entity,
+                    filter=filter_type,
+                    offset=offset,
+                    limit=limit,
+                    hash=0
+                ))
+
+                if not participants.users:
+                    break
+
+                # Фильтруем ботов и администраторов
+                for user in participants.users:
+                    if not user.bot and not getattr(user, 'admin_rights', None):
+                        all_participants.append(user)
+
+                # Обновляем статус
+                await status_message.edit_text(
+                    f"🔄 Парсинг пользователей...\n"
+                    f"Найдено: {len(all_participants)}\n"
+                    f"Фильтр: {filter_type.__class__.__name__}"
+                )
+
+                offset += len(participants.users)
+                await asyncio.sleep(1)  # Задержка для избежания ограничений
+
+            except Exception as e:
+                print(f"Ошибка при парсинге с фильтром {filter_type.__class__.__name__}: {e}")
+                continue
+
+    return all_participants
+
+
 @router.callback_query(lambda c: c.data.startswith("parse_users_"))
 async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
+    """
+    Обработка выбора группы для парсинга пользователей.
+    """
     try:
         if not telethon_client:
             await callback.answer("❌ Ошибка: клиент Telethon не найден")
@@ -88,14 +143,14 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
         try:
             # Получаем участников группы
             group_entity = await telethon_client.get_entity(f"t.me/{group[2]}")
-            participants = await telethon_client.get_participants(group_entity)
+            participants = await parse_all_users(telethon_client, group_entity, callback.message)
 
             # Счетчики для статистики
-            total_users = 0
+            total_users = len(participants)
             saved_users = 0
 
+            # Сохраняем пользователей в базу данных
             for participant in participants:
-                total_users += 1
                 if participant.username:  # Сохраняем только пользователей с username
                     try:
                         db.execute(
@@ -145,71 +200,16 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
     except Exception as e:
         print(f"Ошибка в обработчике парсинга: {e}")
         await callback.message.edit_text(
-            f"❌ Произошла ошибка при парсинге пользователей\n\n" f"Причина: {str(e)}"
+            f"❌ Произошла ошибка при парсинге пользователей\n\n"
+            f"Причина: {str(e)}"
         )
-
-
-async def parse_all_users(client, entity, status_message):
-    """Парсинг всех пользователей группы"""
-    all_participants = []
-
-    # Различные фильтры для получения всех типов пользователей
-    filters = [
-        ChannelParticipantsSearch(""),  # Все пользователи
-        ChannelParticipantsRecent(),  # Недавние пользователи
-        ChannelParticipantsAdmins(),  # Администраторы
-        ChannelParticipantsBots(),  # Боты
-    ]
-
-    for filter_type in filters:
-        offset = 0
-        limit = 200  # Увеличиваем лимит для ускорения парсинга
-
-        while True:
-            try:
-                participants = await client(
-                    GetParticipantsRequest(
-                        channel=entity,
-                        filter=filter_type,
-                        offset=offset,
-                        limit=limit,
-                        hash=0,
-                    )
-                )
-
-                if not participants.users:
-                    break
-
-                # Добавляем только уникальных пользователей
-                new_users = [
-                    user
-                    for user in participants.users
-                    if user.id not in [p.id for p in all_participants]
-                ]
-                all_participants.extend(new_users)
-
-                # Обновляем статус
-                await status_message.edit_text(
-                    f"🔄 Парсинг пользователей...\n"
-                    f"Найдено: {len(all_participants)}\n"
-                    f"Фильтр: {filter_type.__class__.__name__}"
-                )
-
-                offset += len(participants.users)
-                await asyncio.sleep(1)  # Задержка для избежания ограничений
-
-                if len(participants.users) < limit:
-                    break
-
-            except Exception as e:
-                print(f"Ошибка при парсинге с фильтром {filter_type.__class__.__name__}: {e}")
-                continue
-
-    return all_participants
 
 
 @router.message(BotStates.waiting_for_group_name)
 async def parse_users_handler(message: Message, state: FSMContext, client=None):
+    """
+    Обработка ввода названия группы для парсинга.
+    """
     try:
         input_text = message.text.strip()
         status_message = await message.answer("🔄 Начинаю парсинг...")
@@ -237,7 +237,7 @@ async def parse_users_handler(message: Message, state: FSMContext, client=None):
             # Сохраняем пользователей в базу
             users_count = 0
             for user in all_participants:
-                if user.bot:  # Пропускаем только ботов
+                if user.bot:  # Пропускаем ботов
                     continue
 
                 user_data = {
@@ -291,22 +291,3 @@ async def parse_users_handler(message: Message, state: FSMContext, client=None):
         await message.answer(f"❌ Общая ошибка: {str(e)}")
     finally:
         await state.clear()
-
-
-# Пример использования JoinChannelRequest и LeaveChannelRequest
-async def join_channel(client, channel_username):
-    try:
-        entity = await client.get_entity(channel_username)
-        await client(JoinChannelRequest(entity))
-        print(f"Успешно вступили в канал {channel_username}")
-    except Exception as e:
-        print(f"Ошибка при вступлении в канал: {e}")
-
-
-async def leave_channel(client, channel_username):
-    try:
-        entity = await client.get_entity(channel_username)
-        await client(LeaveChannelRequest(entity))
-        print(f"Успешно вышли из канала {channel_username}")
-    except Exception as e:
-        print(f"Ошибка при выходе из канала: {e}")
