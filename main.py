@@ -107,7 +107,6 @@ async def run_bot():
     dp.include_router(group_parsing_router)
     dp.include_router(group_management_router)
     dp.include_router(user_parsing_router)
-    dp.include_router(inviting_router)
     dp.include_router(invite_router)
     logger.info("Роутеры подключены")
 

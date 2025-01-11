@@ -6,12 +6,15 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from states.states import BotStates
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from database.db import Database
 
 router = Router()
 
 async def global_search(client: TelegramClient, keywords: list[str]):
     """Поиск групп через поиск Telegram"""
     results = []
+    unique_groups = set()  # Для хранения уникальных групп
+
     for keyword in keywords:
         print(f"🔍 Поиск по ключевому слову: {keyword}")
         try:
@@ -26,16 +29,17 @@ async def global_search(client: TelegramClient, keywords: list[str]):
                 print(f"Найдено чатов: {len(search_result.chats)}")
                 for chat in search_result.chats:
                     if hasattr(chat, 'username') and chat.username:
-                        group_data = {
-                            "id": chat.id,
-                            "title": chat.title,
-                            "username": chat.username
-                        }
-                        if group_data not in results:
-                            results.append(group_data)
-                            print(f"Найдена группа: {group_data['title']} (@{group_data['username']})")
+                        group_data = (chat.id, chat.title, chat.username)  # Используем кортеж для уникальности
+                        if group_data not in unique_groups:
+                            unique_groups.add(group_data)
+                            results.append({
+                                "id": chat.id,
+                                "title": chat.title,
+                                "username": chat.username
+                            })
+                            print(f"Найдена группа: {chat.title} (@{chat.username})")
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(2)  # Задержка между запросами
 
         except Exception as e:
             print(f"❌ Ошибка при поиске: {str(e)}")
@@ -201,3 +205,61 @@ async def handle_deselect_all(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         print(f"Ошибка при снятии выбора: {e}")
         await callback.answer("❌ Ошибка при снятии выбора")
+
+@router.callback_query(lambda c: c.data == "save_selected")
+async def save_selected_groups(callback: CallbackQuery, state: FSMContext):
+    try:
+        state_data = await state.get_data()
+        found_groups = state_data.get("found_groups", [])
+        selected_indices = state_data.get("selected_groups", [])
+        
+        if not selected_indices:
+            await callback.answer("❌ Не выбрано ни одной группы")
+            return
+            
+        selected_groups = [found_groups[i] for i in selected_indices]
+        print(f"Сохранение групп: {selected_groups}")
+        
+        # Сохраняем группы в базу данных
+        db = Database("bot_database.db")
+        saved_count = 0
+        already_exists = 0
+        
+        for group in selected_groups:
+            try:
+                # Проверяем, существует ли группа уже в базе
+                cursor = db.execute("SELECT id FROM groups WHERE username = ?", (group['username'],))
+                existing_group = cursor.fetchone()
+                
+                if existing_group:
+                    already_exists += 1
+                    continue
+                
+                # Сохраняем новую группу
+                db.execute(
+                    "INSERT INTO groups (id, name, username) VALUES (?, ?, ?)",
+                    (group['id'], group['title'], group['username'])
+                )
+                saved_count += 1
+                
+            except Exception as e:
+                print(f"Ошибка при сохранении группы {group['title']}: {e}")
+                continue
+        
+        db.commit()
+        
+        # Формируем сообщение о результатах
+        result_message = (
+            f"✅ Результаты сохранения:\n\n"
+            f"📥 Сохранено новых групп: {saved_count}\n"
+            f"📝 Уже существующих: {already_exists}\n"
+            f"📊 Всего выбрано: {len(selected_indices)}"
+        )
+        
+        await callback.message.edit_text(result_message)
+        await state.clear()
+        
+    except Exception as e:
+        print(f"Ошибка при сохранении групп: {e}")
+        await callback.answer("❌ Ошибка при сохранении групп")
+        await state.clear()
