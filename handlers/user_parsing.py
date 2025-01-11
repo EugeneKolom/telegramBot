@@ -8,12 +8,13 @@ from telethon.tl.functions.channels import (
     GetFullChannelRequest,
     GetParticipantsRequest,
     JoinChannelRequest,
-    LeaveChannelRequest,
 )
 from telethon.tl.types import (
     ChannelParticipantsSearch,
     ChannelParticipantsRecent,
+    Channel,
 )
+from telethon.errors import FloodWaitError, ChatAdminRequiredError
 import asyncio
 
 router = Router()
@@ -111,6 +112,19 @@ async def parse_all_users(client, entity, status_message):
                 offset += len(participants.users)
                 await asyncio.sleep(1)  # Задержка для избежания ограничений
 
+            except FloodWaitError as e:
+                print(f"Необходимо подождать {e.seconds} секунд.")
+                await asyncio.sleep(e.seconds)
+                continue
+            except ChatAdminRequiredError as e:
+                print(f"Ошибка: недостаточно прав администратора. {e}")
+                await status_message.edit_text(
+                    "❌ Парсинг остановлен!\n\n"
+                    "Причина: недостаточно прав администратора.\n"
+                    "Для парсинга участников группы или канала "
+                    "ваш аккаунт должен быть администратором."
+                )
+                return None  # Останавливаем парсинг
             except Exception as e:
                 print(f"Ошибка при парсинге с фильтром {filter_type.__class__.__name__}: {e}")
                 continue
@@ -141,9 +155,20 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
         await callback.message.edit_text(f"🔄 Начинаю парсинг пользователей группы {group[1]}...")
 
         try:
-            # Получаем участников группы
+            # Получаем сущность группы
             group_entity = await telethon_client.get_entity(f"t.me/{group[2]}")
+
+            # Проверяем, является ли группа каналом или супергруппой
+            if not isinstance(group_entity, Channel):
+                await callback.message.edit_text("❌ Парсинг доступен только для каналов и супергрупп.")
+                return
+
+            # Парсим всех пользователей
             participants = await parse_all_users(telethon_client, group_entity, callback.message)
+
+            # Если парсинг остановлен из-за ошибки
+            if participants is None:
+                return
 
             # Счетчики для статистики
             total_users = len(participants)
@@ -203,91 +228,3 @@ async def parse_users_callback(callback: CallbackQuery, telethon_client=None):
             f"❌ Произошла ошибка при парсинге пользователей\n\n"
             f"Причина: {str(e)}"
         )
-
-
-@router.message(BotStates.waiting_for_group_name)
-async def parse_users_handler(message: Message, state: FSMContext, client=None):
-    """
-    Обработка ввода названия группы для парсинга.
-    """
-    try:
-        input_text = message.text.strip()
-        status_message = await message.answer("🔄 Начинаю парсинг...")
-
-        try:
-            # Получаем группу
-            if input_text.isdigit():
-                group_id = int(input_text)
-                entity = await client.get_entity(group_id)
-            else:
-                group_username = input_text.lstrip("@")
-                entity = await client.get_entity(group_username)
-
-            # Сохраняем группу в базу
-            db = Database("bot_database.db")
-            db_group_id = db.execute(
-                "INSERT OR IGNORE INTO groups (name, username) VALUES (?, ?)",
-                (entity.title, entity.username if hasattr(entity, "username") else None),
-            ).lastrowid
-            db.commit()
-
-            # Парсим всех пользователей
-            all_participants = await parse_all_users(client, entity, status_message)
-
-            # Сохраняем пользователей в базу
-            users_count = 0
-            for user in all_participants:
-                if user.bot:  # Пропускаем ботов
-                    continue
-
-                user_data = {
-                    "id": user.id,
-                    "name": f"{user.first_name or ''} {user.last_name or ''}".strip(),
-                    "username": user.username or "No username",
-                    "is_active": not user.deleted,  # Отмечаем удаленных пользователей
-                    "is_bot": user.bot,
-                    "is_admin": hasattr(user, "admin_rights") and user.admin_rights is not None,
-                }
-
-                if db.execute(
-                    "INSERT OR IGNORE INTO contacts (username, group_id) VALUES (?, ?)",
-                    (user_data["username"], db_group_id),
-                ).rowcount:
-                    users_count += 1
-
-                if users_count % 100 == 0:
-                    await status_message.edit_text(
-                        f"💾 Сохранение пользователей в базу...\n"
-                        f"Обработано: {users_count}/{len(all_participants)}"
-                    )
-
-            # Получаем итоговую статистику
-            cursor = db.execute("SELECT COUNT(*) FROM contacts WHERE group_id = ?", (db_group_id,))
-            total_users_in_db = cursor.fetchone()[0]
-
-            await status_message.edit_text(
-                f"✅ Парсинг завершен\n\n"
-                f"📊 Статистика:\n"
-                f"👥 Всего найдено: {len(all_participants)}\n"
-                f"✨ Новых добавлено: {users_count}\n"
-                f"📝 Всего в базе: {total_users_in_db}\n\n"
-                f"ℹ️ Информация о группе:\n"
-                f"📌 Название: {entity.title}\n"
-                f"🔗 Username: {f'@{entity.username}' if entity.username else 'Отсутствует'}\n"
-                f"🆔 ID: {entity.id}"
-            )
-
-        except ValueError as e:
-            await status_message.edit_text(
-                f"❌ Ошибка формата: {str(e)}\n\n"
-                "Введите:\n"
-                "1. ID группы (например: 1234567890)\n"
-                "2. Или username группы (например: @group или group)"
-            )
-        except Exception as e:
-            await status_message.edit_text(f"❌ Ошибка при парсинге: {str(e)}")
-
-    except Exception as e:
-        await message.answer(f"❌ Общая ошибка: {str(e)}")
-    finally:
-        await state.clear()
