@@ -6,7 +6,10 @@ from database.db import Database
 from telethon import TelegramClient
 from telethon.tl.functions.channels import GetFullChannelRequest
 from states.states import BotStates
-import asyncio
+import logging
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -54,7 +57,7 @@ async def view_groups(message: Message, telethon_client=None):
                     f"📨 Успешно приглашено: {invited_users}"
                 )
             except Exception as e:
-                print(f"Ошибка при получении информации о группе {group[2]}: {e}")
+                logger.error(f"Ошибка при получении информации о группе {group[2]}: {e}")
                 groups_text.append(
                     f"📱 {group[1]} (@{group[2]})\n"
                     f"👥 ID: {group[0]}\n"
@@ -68,7 +71,7 @@ async def view_groups(message: Message, telethon_client=None):
         )
         
     except Exception as e:
-        print(f"Ошибка при показе списка групп: {e}")
+        logger.error(f"Ошибка при показе списка групп: {e}")
         await message.answer("❌ Произошла ошибка при получении списка групп")
 
 # Удаление групп с галочками
@@ -116,7 +119,7 @@ async def delete_group_start(message: Message, state: FSMContext, telethon_clien
         await state.update_data(selected_groups=[])
         
     except Exception as e:
-        print(f"Ошибка при показе групп для удаления: {e}")
+        logger.error(f"Ошибка при показе групп для удаления: {e}")
         await message.answer("❌ Произошла ошибка при получении списка групп")
 
 @router.callback_query(lambda c: c.data.startswith("delete_group_select_"))
@@ -157,7 +160,7 @@ async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
         )
         
     except Exception as e:
-        print(f"Ошибка при выборе группы: {e}")
+        logger.error(f"Ошибка при выборе группы: {e}")
         await callback.answer("❌ Ошибка при выборе группы")
 
 @router.callback_query(lambda c: c.data == "delete_group_select_all")
@@ -193,7 +196,7 @@ async def handle_select_all(callback: CallbackQuery, state: FSMContext):
         )
         
     except Exception as e:
-        print(f"Ошибка при выборе всех групп: {e}")
+        logger.error(f"Ошибка при выборе всех групп: {e}")
         await callback.answer("❌ Ошибка при выборе всех групп")
 
 @router.callback_query(lambda c: c.data == "delete_group_deselect_all")
@@ -203,32 +206,42 @@ async def handle_deselect_all(callback: CallbackQuery, state: FSMContext):
         # Очищаем выбор
         await state.update_data(selected_groups=[])
         
-        # Обновляем клавиатуру
+        # Получаем обновленные данные состояния
         state_data = await state.get_data()
         found_groups = state_data.get("found_groups", [])
         
+        if not found_groups:
+            await callback.answer("❌ Нет групп для выбора")
+            return
+        
+        # Создаем новую клавиатуру с пустыми галочками
         builder = InlineKeyboardBuilder()
         for i, group in enumerate(found_groups):
-            checkbox = "⬜️"
+            checkbox = "⬜️"  # Все галочки сняты
             username_part = f"(@{group[2]})" if group[2] else "(без username)"
             builder.button(
                 text=f"{checkbox} {group[1]} {username_part}",
                 callback_data=f"delete_group_select_{i}"
             )
         
+        # Добавляем кнопки управления
         builder.button(text="✅ Выбрать все", callback_data="delete_group_select_all")
         builder.button(text="❌ Снять выбор", callback_data="delete_group_deselect_all")
         builder.button(text="🗑️ Подтвердить удаление", callback_data="delete_group_confirm")
         
         builder.adjust(1)
         
+        # Обновляем сообщение с новой клавиатурой
         await callback.message.edit_text(
             "📋 Выберите группы для удаления:",
             reply_markup=builder.as_markup()
         )
         
+        # Уведомляем пользователя
+        await callback.answer("Выбор снят")
+        
     except Exception as e:
-        print(f"Ошибка при снятии выбора: {e}")
+        logger.error(f"Ошибка при снятии выбора: {e}")
         await callback.answer("❌ Ошибка при снятии выбора")
 
 @router.callback_query(lambda c: c.data == "delete_group_confirm")
@@ -261,7 +274,7 @@ async def handle_confirm_deletion(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         
     except Exception as e:
-        print(f"Ошибка при удалении групп: {e}")
+        logger.error(f"Ошибка при удалении групп: {e}")
         await callback.answer("❌ Ошибка при удалении групп")
 
 # Добавление группы вручную
