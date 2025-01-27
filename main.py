@@ -1,9 +1,10 @@
 import asyncio
 import logging
-import socket
 import os
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 from config import TOKEN, API_ID, API_HASH
 from database.db import Database
 from handlers import (
@@ -17,7 +18,6 @@ from telethon.errors import SessionPasswordNeededError
 from middleware.client_middleware import TelethonClientMiddleware
 from handlers.invite_management import router as invite_router
 from telethon.sessions import StringSession
-import platform
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 bot = None
 client = None
 db = None
+
+# Конфигурация вебхука
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = "https://bot.yourdomain.com" + WEBHOOK_PATH  # Замените на свой субдомен
+WEB_SERVER_HOST = "0.0.0.0"
+WEB_SERVER_PORT = 8000
 
 # Получение переменных окружения
 api_id = int(os.getenv('API_ID', API_ID))
@@ -72,17 +78,16 @@ async def ensure_client_connected():
         logger.warning("Telethon клиент не подключен. Выполняется повторная настройка...")
         await setup_telethon()
 
-async def start_dummy_server():
-    """Создаёт фиктивный сервер, который слушает порт, чтобы удовлетворить Render"""
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("0.0.0.0", 8000))  # Render ожидает, что приложение будет слушать порт
-    server.listen(5)
-    logger.info("Фиктивный сервер запущен на порту 8000")
-    while True:
-        await asyncio.sleep(3600)  # Поддерживаем сервер активным
+async def on_startup(bot: Bot) -> None:
+    """Действия при запуске"""
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        drop_pending_updates=True
+    )
+    await set_commands(bot)
 
 async def run_bot():
-    """Функция для запуска бота"""
+    """Основная функция для запуска бота"""
     global bot, client, db
     logger.info("Запуск бота...")
 
@@ -109,29 +114,31 @@ async def run_bot():
     dp.include_router(invite_router)
     logger.info("Роутеры подключены")
 
-    # Установка команд бота
-    await set_commands(bot)
-    logger.info("Команды бота установлены")
+    # Настройка вебхука
+    dp.startup.register(on_startup)
+    
+    # Создаем aiohttp приложение
+    app = web.Application()
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
 
-    try:
-        logger.info("Запуск поллинга...")
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-    except Exception as e:
-        logger.error(f"Ошибка при работе бота: {e}")
-        raise
-    finally:
-        logger.info("Завершение работы...")
-        if bot:
-            await bot.session.close()  # Закрываем сессию aiogram
-        if client:
-            await client.disconnect()  # Закрываем Telethon клиент
-        if db:
-            db.close()  # Закрываем базу данных
+    # Запуск сервера
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=WEB_SERVER_HOST, port=WEB_SERVER_PORT)
+    await site.start()
 
-async def shutdown(signal=None):
+    logger.info(f"Вебхук сервер запущен на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
+    await asyncio.Event().wait()  # Бесконечное ожидание
+
+async def shutdown():
     """Корректное завершение работы"""
     global bot, client, db
-    logger.info(f"Получен сигнал завершения: {signal}")
+    logger.info("Удаление вебхука...")
+    await bot.delete_webhook()
+    logger.info("Вебхук удален")
+    
     if bot:
         await bot.session.close()
     if client:
@@ -139,29 +146,15 @@ async def shutdown(signal=None):
     if db:
         db.close()
 
-async def main():
-    """Основная функция"""
-    # Запускаем основные задачи
-    bot_task = asyncio.create_task(run_bot())
-    dummy_server_task = asyncio.create_task(start_dummy_server())
-
-    try:
-        # Ожидаем завершения всех задач
-        await asyncio.gather(bot_task, dummy_server_task)
-    except asyncio.CancelledError:
-        logger.info("Задачи отменены")
-    except Exception as e:
-        logger.error(f"Ошибка в main: {e}")
-    finally:
-        # Корректное завершение
-        await shutdown()
-
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        # Запускаем бота
+        asyncio.run(run_bot())
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
+        asyncio.run(shutdown())
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
+        asyncio.run(shutdown())
         import traceback
         logger.error(traceback.format_exc())
