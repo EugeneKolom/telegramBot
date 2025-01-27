@@ -30,7 +30,7 @@ db = None
 
 # Конфигурация вебхука
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://bot.yourdomain.com" + WEBHOOK_PATH  # Замените на свой субдомен
+WEBHOOK_URL = "https://bot.cremea-tour.site" + WEBHOOK_PATH  # Замените на свой субдомен
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = 8000
 
