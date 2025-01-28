@@ -14,7 +14,6 @@ from handlers import (
     user_parsing_router,
 )
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
 from middleware.client_middleware import TelethonClientMiddleware
 from handlers.invite_management import router as invite_router
 from telethon.sessions import StringSession
@@ -30,7 +29,7 @@ db = None
 
 # Конфигурация вебхука
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://bot.cremea-tour.site" + WEBHOOK_PATH  # Замените на свой субдомен
+WEBHOOK_URL = "https://bot.yourdomain.com" + WEBHOOK_PATH
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = 8000
 
@@ -49,33 +48,39 @@ async def set_commands(bot: Bot) -> None:
     await bot.set_my_commands(commands)
 
 async def setup_telethon():
-    """Настройка и авторизация Telethon клиента"""
+    """Настройка и авторизация Telethon клиента через сессию"""
     global client
-    if client is not None and client.is_connected():
-        logger.info("Telethon клиент уже настроен")
-        return
+    if not string_session:
+        logger.error("Требуется STRING_SESSION. Создайте новую сессию и укажите её в переменных окружения.")
+        exit(1)
 
     client = TelegramClient(StringSession(string_session), api_id, api_hash)
     await client.connect()
 
     if not await client.is_user_authorized():
-        logger.info("Требуется авторизация в Telethon")
-        phone = input("Введите номер телефона (в формате +7...): ")
-        await client.send_code_request(phone)
-        code = input("Введите код подтверждения из Telegram: ")
-        try:
-            await client.sign_in(phone, code)
-        except SessionPasswordNeededError:
-            password = input("Введите пароль двухфакторной аутентификации: ")
-            await client.sign_in(password=password)
+        logger.error("Недействительная сессия. Пожалуйста, обновите STRING_SESSION.")
+        await client.disconnect()
+        exit(1)
 
-    logger.info("Telethon клиент успешно авторизован")
+    logger.info("Telethon клиент успешно авторизован с использованием сессии")
+
+async def generate_new_session():
+    """Генерация новой сессии при первом запуске"""
+    temp_client = TelegramClient(StringSession(), api_id, api_hash)
+    await temp_client.connect()
+    
+    if not await temp_client.is_user_authorized():
+        logger.info("Создание новой сессии...")
+        await temp_client.start()
+        new_session = temp_client.session.save()
+        logger.info(f"Новая сессия создана. Добавьте её в переменные окружения:\nSTRING_SESSION={new_session}")
+        await temp_client.disconnect()
+        exit()
 
 async def ensure_client_connected():
     """Убедиться, что Telethon клиент подключен"""
     global client
     if client is None or not client.is_connected():
-        logger.warning("Telethon клиент не подключен. Выполняется повторная настройка...")
         await setup_telethon()
 
 async def on_startup(bot: Bot) -> None:
@@ -89,6 +94,16 @@ async def on_startup(bot: Bot) -> None:
 async def run_bot():
     """Основная функция для запуска бота"""
     global bot, client, db
+    
+    # Проверка наличия обязательных переменных
+    if not all([API_ID, API_HASH]):
+        logger.error("Требуются API_ID и API_HASH в конфигурации")
+        exit(1)
+
+    # Генерация новой сессии если нет существующей
+    if not string_session:
+        await generate_new_session()
+
     logger.info("Запуск бота...")
 
     # Инициализация базы данных
@@ -130,7 +145,7 @@ async def run_bot():
     await site.start()
 
     logger.info(f"Вебхук сервер запущен на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
-    await asyncio.Event().wait()  # Бесконечное ожидание
+    await asyncio.Event().wait()
 
 async def shutdown():
     """Корректное завершение работы"""
@@ -148,7 +163,6 @@ async def shutdown():
 
 if __name__ == "__main__":
     try:
-        # Запускаем бота
         asyncio.run(run_bot())
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
