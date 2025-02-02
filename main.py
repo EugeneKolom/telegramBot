@@ -29,7 +29,7 @@ db = None
 
 # Конфигурация вебхука
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://bot.yourdomain.com" + WEBHOOK_PATH
+WEBHOOK_URL = "https://bot.crimea-tour.site" + WEBHOOK_PATH
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = 8000
 
