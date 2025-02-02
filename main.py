@@ -87,7 +87,8 @@ async def on_startup(bot: Bot) -> None:
     """Действия при запуске"""
     await bot.set_webhook(
         url=WEBHOOK_URL,
-        drop_pending_updates=True
+        drop_pending_updates=True,
+        ssl_certificate=open('/etc/letsencrypt/live/bot.crimea-tour.site/fullchain.pem', 'r') # Добавьте эту строку
     )
     await set_commands(bot)
 
