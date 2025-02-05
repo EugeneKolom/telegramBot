@@ -4,7 +4,7 @@ import os
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+from aiohttp import web, ClientSession
 from config import TOKEN, API_ID, API_HASH
 from database.db import Database
 from handlers import (
@@ -43,6 +43,9 @@ WEB_SERVER_PORT = 8000
 api_id = int(os.getenv('API_ID', API_ID))
 api_hash = os.getenv('API_HASH', API_HASH)
 string_session = os.getenv('STRING_SESSION')
+
+async def main():
+    session = ClientSession(timeout=60) # Увеличиваем таймаут до 60 секунд
 
 async def set_commands(bot: Bot) -> None:
     """Установка команд бота"""
