@@ -19,7 +19,13 @@ from handlers.invite_management import router as invite_router
 from telethon.sessions import StringSession
 
 # Настройка логирования
-logging.basicConfig(level=logging.DEBUG) #  Включите DEBUG для просмотра всех логов
+logging.basicConfig(
+    filename='bot.log',  # Имя файла для записи логов
+    filemode='w',         # Режим записи файла ('w' - перезаписывать, 'a' - добавлять в конец)
+    encoding='utf-8',     # Кодировка файла
+    level=logging.DEBUG,  # Уровень логирования
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
