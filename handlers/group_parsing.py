@@ -19,65 +19,78 @@ async def is_comments_enabled(client: TelegramClient, chat) -> bool:
     """Проверка, разрешены ли комментарии в канале."""
     try:
         full_chat = await client(GetFullChannelRequest(chat))
-        return full_chat.full_chat.comments_enabled
+        is_enabled = full_chat.full_chat.comments_enabled
+        logger.debug(f"Комментарии в канале {chat.title} ({chat.id}) {'включены' if is_enabled else 'выключены'}")
+        return is_enabled
     except Exception as e:
-        logger.error(f"Ошибка при проверке комментариев: {e}", exc_info=True)
+        logger.error(f"Ошибка при проверке комментариев в канале {chat}: {e}", exc_info=True)
         return False
 
 async def has_user_messages(client: TelegramClient, chat) -> bool:
     """Проверка, есть ли сообщения от пользователей."""
     try:
+        user_messages = False
         async for message in client.iter_messages(chat, limit=10):
             if message.sender and not message.sender.bot:
-                return True
-        return False
+                user_messages = True
+                break  # Прекращаем после первого сообщения пользователя
+        logger.debug(f"Наличие сообщений от пользователей в канале {chat.title} ({chat.id}): {'есть' if user_messages else 'нет'}")
+        return user_messages
     except Exception as e:
-        logger.error(f"Ошибка при проверке сообщений: {e}", exc_info=True)
+        logger.error(f"Ошибка при проверке сообщений в канале {chat}: {e}", exc_info=True)
         return False
 
 async def global_search(client: TelegramClient, keywords: list[str]) -> list[dict]:
     """Поиск групп через поиск Telegram с фильтрацией."""
     results = []
     unique_groups = set()  # Для хранения уникальных групп
+    total_keywords = len(keywords)
+    logger.info(f"Начинается глобальный поиск по {total_keywords} ключевым словам.")
 
-    async def search_keyword(keyword: str):
-        """Поиск по одному ключевому слову."""
-        logger.info(f"🔍 Поиск по ключевому слову: {keyword}")
+    for i, keyword in enumerate(keywords):
+        logger.info(f"[{i+1}/{total_keywords}] 🔍 Поиск по ключевому слову: {keyword}")
         try:
             search_result = await client(SearchRequest(
                 q=keyword,
                 limit=100
             ))
 
-            logger.info(f"Получен результат поиска для '{keyword}'")
+            chats = search_result.chats if hasattr(search_result, 'chats') else []
+            num_chats = len(chats)
+            logger.info(f"[{i+1}/{total_keywords}] Получен результат поиска для '{keyword}'. Найдено {num_chats} чатов.")
 
-            if hasattr(search_result, 'chats'):
-                logger.info(f"Найдено чатов: {len(search_result.chats)}")
-                for chat in search_result.chats:
-                    if hasattr(chat, 'username') and chat.username:
-                        comments_enabled = await is_comments_enabled(client, chat)
-                        has_messages = await has_user_messages(client, chat)
+            for j, chat in enumerate(chats):
+                if hasattr(chat, 'username') and chat.username:
+                    logger.debug(f"[{i+1}/{total_keywords}] [{j+1}/{num_chats}] Обработка чата: {chat.title} (@{chat.username})")
 
-                        if comments_enabled or has_messages:
-                            group_data = (chat.id, chat.title, chat.username)  # Используем кортеж для уникальности
-                            if group_data not in unique_groups:
-                                unique_groups.add(group_data)
-                                results.append({
-                                    "id": chat.id,
-                                    "title": chat.title,
-                                    "username": chat.username,
-                                    "comments_enabled": comments_enabled,
-                                    "has_user_messages": has_messages
-                                })
-                                logger.info(f"Найдена группа: {chat.title} (@{chat.username})")
+                    comments_enabled = await is_comments_enabled(client, chat)
+                    has_messages = await has_user_messages(client, chat)
+
+                    if comments_enabled or has_messages:
+                        group_data = (chat.id, chat.title, chat.username)  # Используем кортеж для уникальности
+                        if group_data not in unique_groups:
+                            unique_groups.add(group_data)
+                            group_info = {
+                                "id": chat.id,
+                                "title": chat.title,
+                                "username": chat.username,
+                                "comments_enabled": comments_enabled,
+                                "has_user_messages": has_messages
+                            }
+                            results.append(group_info)
+                            logger.info(f"[{i+1}/{total_keywords}] [{j+1}/{num_chats}]  ✅ Найдена и добавлена группа: {chat.title} (@{chat.username}), ID: {chat.id}")
+                        else:
+                             logger.debug(f"[{i+1}/{total_keywords}] [{j+1}/{num_chats}] Группа {chat.title} (@{chat.username}), ID: {chat.id} уже существует в unique_groups, пропущена.")
+                    else:
+                        logger.debug(f"[{i+1}/{total_keywords}] [{j+1}/{num_chats}] Группа {chat.title} (@{chat.username}), ID: {chat.id} пропущена, т.к. комментарии отключены и нет сообщений от пользователей.")
+                else:
+                     logger.warning(f"[{i+1}/{total_keywords}] [{j+1}/{num_chats}] Чат {chat.title} ({chat.id}) пропущен, нет username.")
 
         except Exception as e:
-            logger.error(f"❌ Ошибка при поиске по '{keyword}': {str(e)}", exc_info=True)
+            logger.error(f"[{i+1}/{total_keywords}] ❌ Ошибка при поиске по '{keyword}': {str(e)}", exc_info=True)
 
-    # Параллельный запуск поиска по всем ключевым словам
-    await asyncio.gather(*(search_keyword(keyword) for keyword in keywords))
-
-    logger.info(f"Всего найдено уникальных групп: {len(results)}")
+    total_found = len(results)
+    logger.info(f"Глобальный поиск завершен. Всего найдено уникальных групп: {total_found}")
     return results
 
 
