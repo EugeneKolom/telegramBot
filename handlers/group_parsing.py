@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from states.states import BotStates
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.db import Database
+from aiogram.exceptions import TelegramBadRequest
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -192,9 +193,13 @@ async def toggle_group_selection(callback: CallbackQuery, state: FSMContext):
             reply_markup=builder.as_markup()
         )
 
-    except Exception as e:
-        logger.error(f"Ошибка при выборе группы: {e}", exc_info=True)
-        await callback.answer("❌ Ошибка при выборе группы")
+    except TelegramBadRequest as e:
+        if "query is too old" in str(e):
+            logger.warning(f"Игнорируем устаревший callback запрос: {e}")
+            await callback.answer("Эта кнопка устарела. Пожалуйста, выполните команду заново.") #Опционально
+        else:
+            logger.error(f"Ошибка при выборе группы: {e}", exc_info=True)
+            await callback.answer("❌ Ошибка при выборе группы")
 
 
 @router.callback_query(lambda c: c.data == "select_all")
