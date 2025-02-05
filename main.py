@@ -19,7 +19,7 @@ from handlers.invite_management import router as invite_router
 from telethon.sessions import StringSession
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG) #  Включите DEBUG для просмотра всех логов
 logger = logging.getLogger(__name__)
 
 # Глобальные переменные
